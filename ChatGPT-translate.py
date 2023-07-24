@@ -31,7 +31,7 @@ AZURE_API_VERSION = "2023-03-15-preview"
 
 
 
-@retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(6))
+@retry(wait=wait_random_exponential(min=1, max=5), stop=stop_after_attempt(1))
 def translate(key, target_language, text, use_azure=False, api_base="", deployment_name="", options=None):
     # Set up OpenAI API version
     if use_azure:
@@ -46,7 +46,8 @@ def translate(key, target_language, text, use_azure=False, api_base="", deployme
     # lang
 
     # Set up the prompt
-    messages = [{
+    messages = [
+        {
         'role': 'system',
         'content': 'You are a translator assistant.'
     }, {
@@ -92,33 +93,41 @@ def translate_text_file(text_filepath_or_url, options):
 
     paragraphs = read_and_preprocess_data(text_filepath_or_url, options)
 
-    # Create a list to hold your translated_paragraphs. We'll populate it as futures complete.
-    translated_paragraphs = [None for _ in paragraphs]
+    output_file_bilingual = f"{Path(text_filepath_or_url).parent}/{Path(text_filepath_or_url).stem}_bilingual.txt"
+    output_file_bilingual_ing = f"{Path(text_filepath_or_url).parent}/{Path(text_filepath_or_url).stem}_bilingual_ing.txt"
+    with open(output_file_bilingual_ing, "a", encoding="utf-8") as obf:
+        # Create a list to hold your translated_paragraphs. We'll populate it as futures complete.
+        translated_paragraphs = [None for _ in paragraphs]
 
-    # Submit your translation tasks
-    futures = []
-    with ThreadPoolExecutor(max_workers=options.num_threads) as executor:
-        for idx, text in enumerate(paragraphs):
-            future = executor.submit(
-                translate,
-                OPENAI_API_KEY,
-                options.target_language,
-                text,
-                options.use_azure,
-                options.azure_endpoint,
-                options.azure_deployment_name,
-                options=options
-            )
-            futures.append((idx, future))
-        # Iterate over the futures as they complete.
-        for future in tqdm(as_completed([future for idx, future in futures]), total=len(paragraphs), desc="Translating paragraphs", unit="paragraph"):
-            for idx, f in futures:
-                if f == future:
-                    try:
-                        translated_paragraphs[idx] = future.result().strip()
-                    except Exception as e:
-                        print(f"An error occurred during translation: {e}")
-                        translated_paragraphs[idx] = ""  # or however you want to handle errors
+        # Submit your translation tasks
+        futures = []
+        with ThreadPoolExecutor(max_workers=options.num_threads) as executor:
+            for idx, text in enumerate(paragraphs):
+                future = executor.submit(
+                    translate,
+                    OPENAI_API_KEY,
+                    options.target_language,
+                    text,
+                    options.use_azure,
+                    options.azure_endpoint,
+                    options.azure_deployment_name,
+                    options=options
+                )
+                futures.append((idx, future))
+            # Iterate over the futures as they complete.
+            for future in tqdm(as_completed([future for idx, future in futures]), disable=True):
+                for idx, f in futures:
+                    if f == future:
+                        try:
+                            translated_paragraphs[idx] = future.result(timeout=5).strip()
+                            print(paragraphs[idx])
+                            print(translated_paragraphs[idx])
+                            print()
+                            obf.write(f"{paragraphs[idx]}\n{translated_paragraphs[idx]}\n\n")
+                            obf.flush()
+                        except Exception as e:
+                            print(f"An error occurred during translation: {e}")
+                            translated_paragraphs[idx] = ""  # or however you want to handle errors
 
 
     translated_text = "\n".join(translated_paragraphs)
@@ -129,11 +138,10 @@ def translate_text_file(text_filepath_or_url, options):
                                    paragraphs, translated_paragraphs))
 
     bilingual_text = remove_empty_paragraphs(bilingual_text)
-    output_file_bilingual = f"{Path(text_filepath_or_url).parent}/{Path(text_filepath_or_url).stem}_bilingual.txt"
     with open(output_file_bilingual, "w", encoding="utf-8") as f:
         f.write(bilingual_text)
         print(f"Bilingual text saved to {f.name}.")
-    create_bilingual_docx(output_file_bilingual)
+    # create_bilingual_docx(output_file_bilingual)
 
     # Output translated text file
     # remove extra newlines
@@ -144,7 +152,7 @@ def translate_text_file(text_filepath_or_url, options):
     with open(output_file_translated, "w", encoding="utf-8") as f:
         f.write(translated_text)
         print(f"Translated text saved to {f.name}.")
-    create_bilingual_docx(output_file_translated)
+    # create_bilingual_docx(output_file_translated)
 
 
 def download_html(url):
@@ -210,12 +218,12 @@ def parse_arguments():
          "help": "target language to translate to"}),
         ("--only_process_this_file_extension",
          {"type": str, "default": "", "help": "only process files with this extension"}),
-        ("--use_azure", {"action": "store_true", "default": False,
+        ("--use_azure", {"action": "store_true", "default": True,
          "help": "Use Azure OpenAI service instead of OpenAI platform."}),
         ("--azure_endpoint",
-         {"type": str, "default": "", "help": "Endpoint URL of Azure OpenAI service. Only require when use AOAI."}),
+         {"type": str, "default": "https://0705chat.openai.azure.com", "help": "Endpoint URL of Azure OpenAI service. Only require when use AOAI."}),
         ("--azure_deployment_name",
-         {"type": str, "default": "", "help": "Deployment of Azure OpenAI service. Only require when use AOAI."}),
+         {"type": str, "default": "gpt35", "help": "Deployment of Azure OpenAI service. Only require when use AOAI."}),
     ]
 
     for argument, kwargs in arguments:
